@@ -65,19 +65,24 @@ class FunkSVD:
 
     return x, x_mask
     
-  def __init_biases_and_latent_vectors(self):
+  def __init_biases(self):
     u_biases = da.zeros((self.n_users, 1), chunks=(self.chunk_size,1))
     i_biases = da.zeros(self.n_items, chunks=(self.chunk_size,))
 
+    return u_biases, i_biases
+
+  def __init_latent_vectors(self):
     u_factors = da.random.normal(0, 0.1, (self.n_users, self.n_factors), chunks=(self.chunk_size, self.n_factors))
     i_factors = da.random.normal(0, 0.1, (self.n_items, self.n_factors), chunks=(self.chunk_size, self.n_factors))
 
-    return u_biases, i_biases, u_factors, i_factors
+    return u_factors, i_factors
 
   def __get_training_errors(self, error):
     mae = da.sum(da.absolute(error)) / self.n_ratings
     mse = da.sum(error ** 2) / self.n_ratings
-    return (mae, mse)
+    rmse = da.sqrt(mse)
+
+    return (mae, mse, rmse)
 
   def __plot_training_errors(self, errors):
     return
@@ -96,7 +101,8 @@ class FunkSVD:
   ):
     df = self.__preprocess_data(train_df, user_col, item_col, rating_col, chunk_size, n_factors)
     x, x_mask = self.__create_sparse_chunked_matrix(df)
-    u_biases, i_biases, u_factors, i_factors = self.__init_biases_and_latent_vectors()
+    u_biases, i_biases = self.__init_biases()
+    u_factors, i_factors = self.__init_latent_vectors()
 
     start_time_epoch = time.time()
     train_errors = []
@@ -161,14 +167,18 @@ class FunkSVD:
   def eval(self, ground_truths, predictions):
     mae = self.__mae(ground_truths, predictions)
     mse = self.__mse(ground_truths, predictions)
+    rmse = self.__rmse(ground_truths, predictions)
 
-    return mae, mse
+    return mae, mse, rmse
 
   def __mae(self, a, b):
     return (np.abs(np.subtract(a, b))).mean()
   
   def __mse(self, a, b):
     return (np.square(np.subtract(a, b))).mean()
+
+  def __rmse(self, a, b):
+    return np.sqrt(((np.subtract(a, b))**2).mean())
 
   def __print_status(self, iter, max_iter, start_time, status, step=False):
     elapsed_time = time.time() - start_time 

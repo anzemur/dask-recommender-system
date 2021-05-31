@@ -54,7 +54,6 @@ class ALS:
       sub_chunks=[]
       self.__print_status(i, self.n_users, start_time, "Creating sparse-chunked matrix")
       for j in range(0, self.n_items, self.chunk_size):
-        # sub_chunks.append(sparse_df[i: min(i + chunk_size, self.n_users), j: min(j + chunk_size, self.n_items)])
         sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
       chunks.append(sub_chunks)
 
@@ -64,19 +63,24 @@ class ALS:
 
     return x, x_mask
     
-  def __init_biases_and_latent_vectors(self):
+  def __init_biases(self):
     u_biases = da.zeros((self.n_users, 1), chunks=(self.chunk_size,1))
     i_biases = da.zeros(self.n_items, chunks=(self.chunk_size,))
 
+    return u_biases, i_biases
+
+  def __init_latent_vectors(self):
     u_factors = da.random.normal(0, 0.1, (self.n_users, self.n_factors), chunks=(self.chunk_size, self.n_factors))
     i_factors = da.random.normal(0, 0.1, (self.n_items, self.n_factors), chunks=(self.chunk_size, self.n_factors))
 
-    return u_biases, i_biases, u_factors, i_factors
+    return u_factors, i_factors
 
   def __get_training_errors(self, error):
     mae = da.sum(da.absolute(error)) / self.n_ratings
     mse = da.sum(error ** 2) / self.n_ratings
-    return (mae, mse)
+    rmse = da.sqrt(mse)
+
+    return (mae, mse, rmse)
 
   def __plot_training_errors(self, errors):
     return
@@ -95,7 +99,8 @@ class ALS:
   ):
     df = self.__preprocess_data(train_df, user_col, item_col, rating_col, chunk_size, n_factors)
     x, x_mask = self.__create_sparse_chunked_matrix(df)
-    u_biases, i_biases, u_factors, i_factors = self.__init_biases_and_latent_vectors()
+    u_biases, i_biases = self.__init_biases()
+    u_factors, i_factors = self.__init_latent_vectors()
 
     start_time_epoch = time.time()
     train_errors = []
@@ -159,14 +164,18 @@ class ALS:
   def eval(self, ground_truths, predictions):
     mae = self.__mae(ground_truths, predictions)
     mse = self.__mse(ground_truths, predictions)
+    rmse = self.__rmse(ground_truths, predictions)
 
-    return mae, mse
+    return mae, mse, rmse
 
   def __mae(self, a, b):
-    return (np.abs(np.subtract(a, b))).mean()
+    return np.abs(np.subtract(a, b)).mean()
   
   def __mse(self, a, b):
-    return (np.square(np.subtract(a, b))).mean()
+    return np.square(np.subtract(a, b)).mean()
+
+  def __rmse(self, a, b):
+    return np.sqrt(((np.subtract(a, b))**2).mean())
 
   def __print_status(self, iter, max_iter, start_time, status, step=False):
     elapsed_time = time.time() - start_time 
@@ -178,7 +187,6 @@ class ALS:
     else:
       sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j) + 1}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
     sys.stdout.flush()
-
 
 def run():
     client = Client(n_workers=2)
@@ -195,7 +203,7 @@ def run():
     model.fit(
         n_factors=50,
         train_df=train,
-        epochs=100,
+        epochs=400,
         chunk_size=2000,
         collect_errors=True
     )
