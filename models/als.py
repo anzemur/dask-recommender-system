@@ -9,7 +9,7 @@ import pandas as pd
 from dask import compute
 import sparse
 
-class FunkSVD:
+class ALS:
   def __init__(self, client: Client):
     self.client = client
 
@@ -52,13 +52,12 @@ class FunkSVD:
     chunks = []
     for i in range(0, self.n_users, self.chunk_size):
       sub_chunks=[]
-      self.__print_status(i + self.chunk_size, self.n_users, start_time, "Creating sparse-chunked matrix")
+      self.__print_status(i, self.n_users, start_time, "Creating sparse-chunked matrix")
       for j in range(0, self.n_items, self.chunk_size):
         # sub_chunks.append(sparse_df[i: min(i + chunk_size, self.n_users), j: min(j + chunk_size, self.n_items)])
         sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
       chunks.append(sub_chunks)
 
-    self.__print_status(self.n_users - 1, self.n_users, start_time, "Creating sparse-chunked matrix")
     x = da.block(chunks)
     x_mask = da.sign(x).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
     print()
@@ -154,7 +153,6 @@ class FunkSVD:
         pred = min(max(self.min_rating, pred), self.max_rating)
       
       predictions.append(pred)
-    print()
 
     return predictions
 
@@ -176,7 +174,7 @@ class FunkSVD:
     j= iter / max_iter
     sys.stdout.write('\r')
     if step:
-      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status} ({iter}/{max_iter})")
+      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% ({iter}/{max_iter}) Elapsed time: {round(elapsed_time, 3)} s - {status}")
     else:
       sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j) + 1}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
     sys.stdout.flush()
@@ -193,7 +191,7 @@ def run():
     train = df.sample(frac=0.7, random_state=7)
     test = df.drop(train.index.tolist())
 
-    model = FunkSVD(client)
+    model = ALS(client)
     model.fit(
         n_factors=50,
         train_df=train,
