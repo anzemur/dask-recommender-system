@@ -49,36 +49,37 @@ class ALS:
     df_val = df.values
     sparse_df = sparse.COO(df_val[:, :2].T.astype(int), df_val[:, 2], shape=((self.n_users, self.n_items)))
 
-    chunks = []
-    for i in range(0, self.n_users, self.chunk_size):
-      sub_chunks=[]
-      self.__print_status(i, self.n_users, start_time, "Creating sparse-chunked matrix")
-      for j in range(0, self.n_items, self.chunk_size):
-        sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
-      chunks.append(sub_chunks)
+    # chunks = []
+    # for i in range(0, self.n_users, self.chunk_size):
+    #   sub_chunks=[]
+    #   self.__print_status(i, self.n_users, start_time, "Creating sparse-chunked matrix")
+    #   for j in range(0, self.n_items, self.chunk_size):
+    #     sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
+    #   chunks.append(sub_chunks)
 
-    x = da.block(chunks)
-    x_mask = da.sign(x).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
+    # x = da.block(chunks)
+    # x_mask = da.sign(x).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
+
+    x = sparse_df
+    x_mask = np.sign(x)
+
     print()
 
     return x, x_mask
-    
-  def __init_biases(self):
-    u_biases = da.zeros((self.n_users, 1), chunks=(self.chunk_size,1))
-    i_biases = da.zeros(self.n_items, chunks=(self.chunk_size,))
-
-    return u_biases, i_biases
 
   def __init_latent_vectors(self):
-    u_factors = da.random.normal(0, 0.1, (self.n_users, self.n_factors), chunks=(self.chunk_size, self.n_factors))
-    i_factors = da.random.normal(0, 0.1, (self.n_items, self.n_factors), chunks=(self.chunk_size, self.n_factors))
+    # u_factors = da.random.random(0, 0.1, (self.n_users, self.n_factors), chunks=(self.chunk_size, self.n_factors))
+    # i_factors = da.random.random(0, 0.1, (self.n_factors, self.n_items), chunks=(self.n_factors, self.chunk_size))
+
+    u_factors = np.random.rand(self.n_users, self.n_factors)
+    i_factors = np.random.rand(self.n_factors, self.n_items)
 
     return u_factors, i_factors
 
   def __get_training_errors(self, error):
-    mae = da.sum(da.absolute(error)) / self.n_ratings
-    mse = da.sum(error ** 2) / self.n_ratings
-    rmse = da.sqrt(mse)
+    mae = np.sum(np.absolute(error)) / self.n_ratings
+    mse = np.sum(error ** 2) / self.n_ratings
+    rmse = np.sqrt(mse)
 
     return (mae, mse, rmse)
 
@@ -91,7 +92,7 @@ class ALS:
           chunk_size,
           epochs=50,
           lr=0.0005,
-          reg=0.02,
+          reg=0.0001,
           collect_errors=False,
           user_col="user",
           item_col="item",
@@ -99,42 +100,55 @@ class ALS:
   ):
     df = self.__preprocess_data(train_df, user_col, item_col, rating_col, chunk_size, n_factors)
     x, x_mask = self.__create_sparse_chunked_matrix(df)
-    u_biases, i_biases = self.__init_biases()
     u_factors, i_factors = self.__init_latent_vectors()
 
     start_time_epoch = time.time()
     train_errors = []
+
+    I = reg * np.eye(n_factors)
     for epoch in range(epochs):
       self.__print_status(epoch + 1, epochs, start_time_epoch, "Creating epochs", step=True)
 
-      pred = self.mean_rating + u_biases + u_factors @ i_factors.T + i_biases
-      error = x - pred * x_mask
-      
-      u_biases = u_biases + lr * da.sum(error - reg * u_biases, axis=1, keepdims=True)
-      i_biases = i_biases + lr * da.sum(error - reg * i_biases, axis=0, keepdims=True)
+      for i, mask_row in enumerate(x_mask):
+        masked_factors = i_factors * mask_row
+        a = np.dot(masked_factors, i_factors.T) + I
+        b = np.dot(masked_factors, x[i].T)
 
-      u_factors = u_factors + lr * (error @ i_factors - reg * u_factors)
-      i_factors = i_factors + lr * ((u_factors.T @ error).T - reg * i_factors)
+        u_factors[i] = np.linalg.solve(a, b.todense()).T
+
+      for j, mask_col in enumerate(x_mask.T):
+        masked_factors = u_factors.T * mask_col
+        a = np.dot(masked_factors, u_factors) + I
+        b = np.dot(masked_factors, x[:, j])
+
+        i_factors[:,j] = np.linalg.solve(a, b.todense())
+
+
+      pred = np.dot(u_factors, i_factors)
+      error = x - pred * x_mask
+
 
       if collect_errors:
         train_errors.append(self.__get_training_errors(error))
     
     print("\nComputing in parallel...")
 
-    compute_start_time = time.time()
-    if collect_errors:
-      self.u_biases, self.i_biases, self.u_factors, self.i_factors, train_errors= compute(u_biases, i_biases, u_factors, i_factors, train_errors)
-    else:
-      self.u_biases, self.i_biases, self.u_factors, self.i_factors= compute(u_biases, i_biases, u_factors, i_factors)
-    self.u_biases = self.u_biases.T
-    compute_end_time = time.time()
+    # compute_start_time = time.time()
+    # if collect_errors:
+    #   self.u_factors, self.i_factors, train_errors= compute(u_factors, i_factors, train_errors)
+    # else:
+    #   self.u_factors, self.i_factors = compute(u_factors, i_factors)
+    # compute_end_time = time.time()
 
-    print("Compute parallel time: {} s".format(round(compute_end_time - compute_start_time, 3)))
-    print("Compute parallel time per epoch: {} s".format(round((compute_end_time - compute_start_time) / epochs, 3)))
+    # print("Compute parallel time: {} s".format(round(compute_end_time - compute_start_time, 3)))
+    # print("Compute parallel time per epoch: {} s".format(round((compute_end_time - compute_start_time) / epochs, 3)))
 
-    if collect_errors:
-      print("Ploting training errors...")
-      # print(train_errors)
+    print(train_errors)
+
+    self.x = np.dot(u_factors, i_factors)
+
+    # if collect_errors:
+    #   print("Ploting training errors...")
  
   def predict(self, test_df, user_col=None, item_col=None):
     if user_col is None: user_col = self.user_col
@@ -154,7 +168,7 @@ class ALS:
         u_id = self.u_mapping[user]
         i_id = self.i_mapping[item]
 
-        pred += self.u_biases[0][u_id] + self.i_biases[0][i_id] + self.u_factors[u_id] @ self.i_factors[i_id]
+        pred = self.x[u_id][i_id]
         pred = min(max(self.min_rating, pred), self.max_rating)
       
       predictions.append(pred)
@@ -191,28 +205,30 @@ class ALS:
 def run():
     client = Client(n_workers=2)
 
-    df = pd.read_csv("data/prime_pantry_5.csv", names=["item", "user", "rating", "time"])
+    df = pd.read_csv("data/video_game_5.csv", names=["item", "user", "rating", "time"])
     df = df.drop_duplicates()
     df = df.sort_values('time').drop_duplicates(subset=['item', 'user'], keep="last")
     df = df.drop('time', axis=1)
+    df = df.head(10000)
 
     train = df.sample(frac=0.7, random_state=7)
+    print(train.shape)
     test = df.drop(train.index.tolist())
 
     model = ALS(client)
     model.fit(
-        n_factors=50,
+        n_factors=20,
         train_df=train,
-        epochs=400,
-        chunk_size=2000,
+        epochs=10,
+        chunk_size=50,
         collect_errors=True
     )
 
     predictions = model.predict(test)
-    print(len(predictions))
+    # print(len(predictions))
 
     gt = test["rating"].to_numpy()
-    print(len(gt))
+    # print(len(gt))
 
     print(model.eval(gt, predictions))
 

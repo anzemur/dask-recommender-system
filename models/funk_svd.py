@@ -4,10 +4,15 @@ from dask.base import persist
 import numpy as np
 import sys
 from dask.distributed import Client
+from dask.diagnostics import ProgressBar
 import dask.dataframe as dd
 import pandas as pd
 from dask import compute
 import sparse
+import seaborn as sns
+import matplotlib.pyplot as plt
+import os
+from datetime import datetime
 
 class FunkSVD:
   def __init__(self, client: Client):
@@ -15,7 +20,7 @@ class FunkSVD:
 
   def __preprocess_data(self, df, user_col, item_col, rating_col, chunk_size, n_factors):
     start_time = time.time()
-    self.__print_status(0, 100, start_time, "Preprocessing data")
+    self.__print_status(0, 100, start_time, "Preprocessing data...")
     self.chunk_size = chunk_size
     self.n_factors = n_factors
     self.user_col = user_col
@@ -29,7 +34,7 @@ class FunkSVD:
     self.i_mapping = { x: i for i, x in enumerate(self.i_ids) }
     df['u_encodings'] = df[user_col].map(self.u_mapping)
     df['i_encodings'] = df[item_col].map(self.i_mapping)
-    self.__print_status(50, 100, start_time, "Preprocessing data")
+    self.__print_status(50, 100, start_time, "Preprocessing data...")
 
     self.n_users = len(self.u_ids)
     self.n_items = len(self.i_ids)
@@ -40,7 +45,7 @@ class FunkSVD:
     self.mean_rating = np.mean(df[rating_col])
 
     df = df[["u_encodings", "i_encodings", rating_col]]
-    self.__print_status(99, 100, start_time, "Preprocessing data")
+    self.__print_status(100, 100, start_time, "Preprocessing data...")
     print()
     return df
 
@@ -52,13 +57,12 @@ class FunkSVD:
     chunks = []
     for i in range(0, self.n_users, self.chunk_size):
       sub_chunks=[]
-      self.__print_status(i + self.chunk_size, self.n_users, start_time, "Creating sparse-chunked matrix")
+      self.__print_status(i + self.chunk_size, self.n_users, start_time, "Creating sparse-chunked matrix...")
       for j in range(0, self.n_items, self.chunk_size):
-        # sub_chunks.append(sparse_df[i: min(i + chunk_size, self.n_users), j: min(j + chunk_size, self.n_items)])
         sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
       chunks.append(sub_chunks)
 
-    self.__print_status(self.n_users - 1, self.n_users, start_time, "Creating sparse-chunked matrix")
+    self.__print_status(self.n_users, self.n_users, start_time, "Creating sparse-chunked matrix...")
     x = da.block(chunks)
     x_mask = da.sign(x).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
     print()
@@ -85,16 +89,41 @@ class FunkSVD:
     return (mae, mse, rmse)
 
   def __plot_training_errors(self, errors):
-    return
+    if not os.path.exists('res/'):
+        os.mkdir('res/')
+
+    mapped_errors = {
+      "MAE": [],
+      "MSE": [],
+      "RMSE": [],
+    }
+
+    for error in errors:
+      mapped_errors["MAE"].append(error[0])
+      mapped_errors["MSE"].append(error[1])
+      mapped_errors["RMSE"].append(error[2])
+
+    sns.set_style("darkgrid")
+    start_time = time.time()
+    for index, (error, error_values) in enumerate(mapped_errors.items()):
+      self.__print_status(index + 1, len(mapped_errors), start_time, "Ploting training errors...")
+      plt.figure(index)
+      plt.xlabel(error)
+      plt.ylabel('Epoch')
+      plt.plot(error_values)
+      plt.savefig("res/{}-{}.png".format(error, datetime.today().strftime('%Y-%m-%d-%H:%M:%S')))
+
+    print()
 
   def fit(self,
           n_factors,
           train_df,
           chunk_size,
           epochs=50,
-          lr=0.0005,
-          reg=0.02,
+          lr=0.001,
+          reg=0.001,
           collect_errors=False,
+          plot_errors=False,
           user_col="user",
           item_col="item",
           rating_col="rating",
@@ -123,9 +152,10 @@ class FunkSVD:
     
     print("\nComputing in parallel...")
 
-    compute_start_time = time.time()
+    compute_start_time = time.time()    
     if collect_errors:
-      self.u_biases, self.i_biases, self.u_factors, self.i_factors, train_errors= compute(u_biases, i_biases, u_factors, i_factors, train_errors)
+      with ProgressBar():
+        self.u_biases, self.i_biases, self.u_factors, self.i_factors, self.train_errors= compute(u_biases, i_biases, u_factors, i_factors, train_errors)
     else:
       self.u_biases, self.i_biases, self.u_factors, self.i_factors= compute(u_biases, i_biases, u_factors, i_factors)
     self.u_biases = self.u_biases.T
@@ -134,9 +164,8 @@ class FunkSVD:
     print("Compute parallel time: {} s".format(round(compute_end_time - compute_start_time, 3)))
     print("Compute parallel time per epoch: {} s".format(round((compute_end_time - compute_start_time) / epochs, 3)))
 
-    if collect_errors:
-      print("Ploting training errors...")
-      # print(train_errors)
+    if plot_errors:
+      self.__plot_training_errors(self.train_errors)
  
   def predict(self, test_df, user_col=None, item_col=None):
     if user_col is None: user_col = self.user_col
@@ -188,13 +217,11 @@ class FunkSVD:
     if step:
       sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status} ({iter}/{max_iter})")
     else:
-      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j) + 1}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
+      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
     sys.stdout.flush()
 
 
 def run():
-    client = Client(n_workers=2)
-
     df = pd.read_csv("data/prime_pantry_5.csv", names=["item", "user", "rating", "time"])
     df = df.drop_duplicates()
     df = df.sort_values('time').drop_duplicates(subset=['item', 'user'], keep="last")
@@ -203,24 +230,119 @@ def run():
     train = df.sample(frac=0.7, random_state=7)
     test = df.drop(train.index.tolist())
 
+    print(train.shape)
+
+    client = Client(n_workers=2)
     model = FunkSVD(client)
     model.fit(
-        n_factors=50,
+        n_factors=30,
         train_df=train,
-        epochs=100,
-        chunk_size=2000,
-        collect_errors=True
+        epochs=2,
+        chunk_size=3000,
+        collect_errors=True,
+        plot_errors=True
     )
+    client.shutdown()
 
     predictions = model.predict(test)
-    print(len(predictions))
-
     gt = test["rating"].to_numpy()
-    print(len(gt))
 
-    print(model.eval(gt, predictions))
+    eval = model.eval(gt, predictions)
+    print(eval)
 
-    client.shutdown()
+    # client = Client(n_workers=2)
+
+    # errors = []
+    # evals = []
+
+    # for i in range(10, 40, 10):
+    #   model = FunkSVD(client)
+    #   model.fit(
+    #       n_factors=i,
+    #       train_df=train,
+    #       epochs=100,
+    #       chunk_size=3000,
+    #       collect_errors=True
+    #   )
+
+    #   errors.append(model.errors)
+
+    #   predictions = model.predict(test)
+    #   print(len(predictions))
+
+    #   gt = test["rating"].to_numpy()
+    #   print(len(gt))
+
+    #   eval = model.eval(gt, predictions)
+    #   print(eval)
+    #   evals.append(eval)
+
+    
+    # mae = []
+    # mse = []
+    # rmse = []
+
+    # mae1 = []
+    # mse1 = []
+    # rmse1 = []
+
+    # mae2 = []
+    # mse2 = []
+    # rmse2 = []
+
+    # for error in errors[0]:
+    #   mae.append(error[0])
+    #   mse.append(error[1])
+    #   rmse.append(error[2])
+
+    # for error in errors[1]:
+    #   mae1.append(error[0])
+    #   mse1.append(error[1])
+    #   rmse1.append(error[2])
+
+    # for error in errors[2]:
+    #   mae2.append(error[0])
+    #   mse2.append(error[1])
+    #   rmse2.append(error[2])
+    
+
+    # sns.set_style("darkgrid")
+
+    # plt.figure(0)
+    # plt.ylabel('MAE')
+    # plt.xlabel('Epoch')
+    # plt.plot(mae)
+    # plt.plot(mae1)
+    # plt.plot(mae2)
+    # plt.legend(["10 factors", "20 factors", "30 factors"], loc="upper right")
+
+    # plt.savefig("res/mae.png")
+
+    # plt.figure(1)
+    
+    # plt.ylabel('MSE')
+    # plt.xlabel('Epoch')
+    # plt.plot(mse)
+    # plt.plot(mse1)
+    # plt.plot(mse2)
+    # plt.legend(["10 factors", "20 factors", "30 factors"], loc="upper right")
+    # plt.savefig("res/mse.png")
+
+    # plt.figure(2)
+    # plt.ylabel('RMSE')
+    # plt.xlabel('Epoch')
+    # plt.plot(rmse)
+    # plt.plot(rmse1)
+    # plt.plot(rmse2)
+    # plt.legend(["10 factors", "20 factors", "30 factors"], loc="upper right")
+    # plt.savefig("res/rmse.png")
+
+    # print(evals)
+    
+
+    # client.shutdown()
+
+    
 
 if __name__ == '__main__':
     run()

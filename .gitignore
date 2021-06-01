@@ -134,3 +134,6 @@ dmypy.json
 # Dask worker files
 /dask-worker-space
 /*/dask-worker-space
+
+# Results folder
+/res
