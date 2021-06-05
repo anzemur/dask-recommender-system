@@ -1,2 +1,2 @@
-# dask-recommender-system
-Recommender system models parallelized with the help of Dask.
+# Dask recommender system
+Two recommender system models (FunkSVD and ALS) parallelized with the help of Dask.
