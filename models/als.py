@@ -3,7 +3,6 @@ import dask.array as da
 import numpy as np
 import sys
 from dask.distributed import Client
-import pandas as pd
 from dask import compute
 import sparse
 import seaborn as sns
@@ -17,7 +16,7 @@ class ALS:
 
   def __preprocess_data(self, df, user_col, item_col, rating_col, chunk_size, n_factors):
     start_time = time.time()
-    self.__print_status(0, 100, start_time, "Preprocessing data")
+    self.__print_status(0, 100, start_time, "Preprocessing data...")
     self.chunk_size = chunk_size
     self.n_factors = n_factors
     self.user_col = user_col
@@ -31,7 +30,7 @@ class ALS:
     self.i_mapping = { x: i for i, x in enumerate(self.i_ids) }
     df['u_encodings'] = df[user_col].map(self.u_mapping)
     df['i_encodings'] = df[item_col].map(self.i_mapping)
-    self.__print_status(50, 100, start_time, "Preprocessing data")
+    self.__print_status(50, 100, start_time, "Preprocessing data...")
 
     self.n_users = len(self.u_ids)
     self.n_items = len(self.i_ids)
@@ -42,7 +41,7 @@ class ALS:
     self.mean_rating = np.mean(df[rating_col])
 
     df = df[["u_encodings", "i_encodings", rating_col]]
-    self.__print_status(100, 100, start_time, "Preprocessing data")
+    self.__print_status(100, 100, start_time, "Preprocessing data...")
     print()
     return df
 
@@ -54,12 +53,12 @@ class ALS:
     chunks = []
     for i in range(0, self.n_users, self.chunk_size):
       sub_chunks=[]
-      self.__print_status(i + self.chunk_size, self.n_users, start_time, "Creating sparse-chunked matrix...")
+      self.__print_status(i + self.chunk_size, self.n_users, start_time, "Creating user-item matrix...")
       for j in range(0, self.n_items, self.chunk_size):
         sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
       chunks.append(sub_chunks)
 
-    self.__print_status(self.n_users, self.n_users, start_time, "Creating sparse-chunked matrix...")
+    self.__print_status(self.n_users, self.n_users, start_time, "Creating user-item matrix...")
     x = da.block(chunks)
     x_mask = da.sign(x).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
     print()
@@ -220,36 +219,3 @@ class ALS:
     mse = self.__mse(ground_truths, predictions)
     rmse = self.__rmse(ground_truths, predictions)
     return mae, mse, rmse
-
-def run():
-    client = Client(n_workers=2)
-
-    df = pd.read_csv("data/prime_pantry_5.csv", names=["item", "user", "rating", "time"])
-    df = df.drop_duplicates()
-    df = df.sort_values('time').drop_duplicates(subset=['item', 'user'], keep="last")
-    df = df.drop('time', axis=1)
-
-    train = df.sample(frac=0.7, random_state=7)
-    print(train.shape)
-    test = df.drop(train.index.tolist())
-
-    model = ALS(client)
-    model.fit(
-        n_factors=20,
-        train_df=train,
-        epochs=40,
-        chunk_size=3000,
-        collect_errors=True,
-        plot_errors=True
-    )
-
-    predictions = model.predict(test)
-    gt = test["rating"].to_numpy()
-
-    eval = model.eval(gt, predictions)
-    print(eval)
-
-    client.shutdown()
-
-if __name__ == '__main__':
-    run()
