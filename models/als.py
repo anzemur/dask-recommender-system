@@ -1,14 +1,15 @@
 import time
 import dask.array as da
-from dask.array.core import block
-from dask.base import persist
 import numpy as np
 import sys
 from dask.distributed import Client
-import dask.dataframe as dd
 import pandas as pd
 from dask import compute
 import sparse
+import seaborn as sns
+import matplotlib.pyplot as plt
+import os
+from datetime import datetime
 
 class ALS:
   def __init__(self, client: Client):
@@ -41,7 +42,7 @@ class ALS:
     self.mean_rating = np.mean(df[rating_col])
 
     df = df[["u_encodings", "i_encodings", rating_col]]
-    self.__print_status(99, 100, start_time, "Preprocessing data")
+    self.__print_status(100, 100, start_time, "Preprocessing data")
     print()
     return df
 
@@ -50,121 +51,143 @@ class ALS:
     df_val = df.values
     sparse_df = sparse.COO(df_val[:, :2].T.astype(int), df_val[:, 2], shape=((self.n_users, self.n_items)))
 
-    # chunks = []
-    # for i in range(0, self.n_users, self.chunk_size):
-    #   sub_chunks=[]
-    #   self.__print_status(i, self.n_users, start_time, "Creating sparse-chunked matrix")
-    #   for j in range(0, self.n_items, self.chunk_size):
-    #     sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
-    #   chunks.append(sub_chunks)
+    chunks = []
+    for i in range(0, self.n_users, self.chunk_size):
+      sub_chunks=[]
+      self.__print_status(i + self.chunk_size, self.n_users, start_time, "Creating sparse-chunked matrix...")
+      for j in range(0, self.n_items, self.chunk_size):
+        sub_chunks.append(sparse_df[i: i + self.chunk_size, j: j + self.chunk_size])
+      chunks.append(sub_chunks)
 
+    self.__print_status(self.n_users, self.n_users, start_time, "Creating sparse-chunked matrix...")
+    x = da.block(chunks)
+    x_mask = da.sign(x).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
+    print()
 
-    # chunks = []
-    # for i in range(0, self.n_items):
-    #   chunks.append(sparse_df[0: self.n_users, i: i + 1])
-      
-    # x = da.block(chunks)
-    # x_mask = da.sign(x).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
+    return x, x_mask
 
-    # chunks = []
-    # for i in range(0, self.n_users):
-    #   chunks.append(sparse_df[i: i + 1, 0: self.n_items].T)
-    
-    # x_t = da.block(chunks)
-    # x_mask_t = da.sign(x_t).map_blocks(lambda x: x.todense(), dtype=np.ndarray) == 1
-      
+  def __init_biases(self):
+    u_biases = da.zeros((self.n_users, 1), chunks=(self.chunk_size,1))
+    i_biases = da.zeros(self.n_items, chunks=(self.chunk_size,))
 
-    # x = sparse_df
-    # x_mask = np.sign(x)
-
-    # print()
-
-    return x, x_mask, x_t, x_mask_t
+    return u_biases, i_biases
 
   def __init_latent_vectors(self):
-    # u_factors = da.random.random(0, 0.1, (self.n_users, self.n_factors), chunks=(self.chunk_size, self.n_factors))
-    # i_factors = da.random.random(0, 0.1, (self.n_factors, self.n_items), chunks=(self.n_factors, self.chunk_size))
-
-    # u_factors = np.random.rand(self.n_users, self.n_factors)
-    # i_factors = np.random.rand(self.n_factors, self.n_items)
-
-    u_factors = np.random.uniform(0, 0.1, (self.n_users, self.n_factors))
-    i_factors = np.random.uniform(0, 0.1, (self.n_factors, self.n_items))
+    u_factors = da.random.uniform(0, 0.1, (self.n_users, self.n_factors), chunks=(self.chunk_size, self.n_factors))
+    i_factors = da.random.uniform(0, 0.1, (self.n_items, self.n_factors), chunks=(self.chunk_size, self.n_factors))
 
     return u_factors, i_factors
 
+  def __compute_learing_error(self, u_factors, i_factors, u_biases, i_biases, x, x_mask):
+    pred = self.mean_rating + u_biases + u_factors @ i_factors.T + i_biases
+    error = x - pred * x_mask
+    return error
+
   def __get_training_errors(self, error):
-    mae = np.sum(np.absolute(error)) / self.n_ratings
-    mse = np.sum(error ** 2) / self.n_ratings
-    rmse = np.sqrt(mse)
+    mae = da.sum(da.absolute(error)) / self.n_ratings
+    mse = da.sum(error ** 2) / self.n_ratings
+    rmse = da.sqrt(mse)
 
     return (mae, mse, rmse)
 
   def __plot_training_errors(self, errors):
-    return
+    if not os.path.exists('res/'):
+        os.mkdir('res/')
+
+    mapped_errors = {
+      "MAE": [],
+      "MSE": [],
+      "RMSE": [],
+    }
+
+    for error in errors:
+      mapped_errors["MAE"].append(error[0])
+      mapped_errors["MSE"].append(error[1])
+      mapped_errors["RMSE"].append(error[2])
+
+    sns.set_style("darkgrid")
+    start_time = time.time()
+    for index, (error, error_values) in enumerate(mapped_errors.items()):
+      self.__print_status(index + 1, len(mapped_errors), start_time, "Ploting training errors...")
+      plt.figure(index)
+      plt.xlabel(error)
+      plt.ylabel('Epoch')
+      plt.plot(error_values)
+      plt.savefig("res/{}-{}-{}.png".format(type(self).__name__, error, datetime.today().strftime('%Y-%m-%d-%H:%M:%S')))
+
+    print()
+
+  def __mae(self, a, b):
+    return np.abs(np.subtract(a, b)).mean()
+  
+  def __mse(self, a, b):
+    return np.square(np.subtract(a, b)).mean()
+
+  def __rmse(self, a, b):
+    return np.sqrt(((np.subtract(a, b))**2).mean())
+
+  def __print_status(self, iter, max_iter, start_time, status, step=False):
+    elapsed_time = time.time() - start_time 
+    bar_length = 70
+    j = iter / max_iter
+    sys.stdout.write('\r')
+    if step:
+      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status} ({iter}/{max_iter})")
+    else:
+      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
+    sys.stdout.flush()
 
   def fit(self,
           n_factors,
           train_df,
           chunk_size,
           epochs=50,
+          lr=0.001,
           reg=0.02,
           collect_errors=False,
+          plot_errors=False,
           user_col="user",
           item_col="item",
           rating_col="rating",
   ):
     df = self.__preprocess_data(train_df, user_col, item_col, rating_col, chunk_size, n_factors)
-    x, x_mask, x_t, x_mask_t = self.__create_sparse_chunked_matrix(df)
+    x, x_mask = self.__create_sparse_chunked_matrix(df)
+    u_biases, i_biases = self.__init_biases()
     u_factors, i_factors = self.__init_latent_vectors()
 
-    train_errors = []
-    # x_compute = x.compute()
-    # x_mask_compute = x_mask.compute()
-
-    I = reg * np.eye(n_factors)
     start_time_epoch = time.time()
-    print("starting epochs")
+    train_errors = []
+    error = self.__compute_learing_error(u_factors, i_factors, u_biases, i_biases, x, x_mask)
     for epoch in range(epochs):
-      def compute_items(mask_row, x, u_factors, I, block_id=None):
-        if block_id:
-          masked_factors = u_factors * mask_row
-          a = da.dot(masked_factors.T, u_factors) + I
-          b = da.dot(masked_factors.T, x)
-          return np.linalg.solve(a, b)
-        return mask_row
+      self.__print_status(epoch + 1, epochs, start_time_epoch, "Creating epochs", step=True)
 
-      print("computing factors")
-      i_factors = da.map_blocks(compute_items, x_mask, x, u_factors, I)
-      i_factors = i_factors.compute()
-      print(i_factors)
+      if collect_errors:
+        train_errors.append(self.__get_training_errors(error))
 
-      # def compute_users(mask_col, x_t, i_factors, I, block_id=None):
-      #   if block_id:
-      #     masked_factors = i_factors * mask_col.T
-      #     a = np.dot(i_factors, masked_factors.T) + I
-      #     b = np.dot(masked_factors, x_t)
-      #     return np.linalg.solve(a, b)
-      #   return mask_col
+      u_factors = u_factors + lr * (error @ i_factors - reg * u_factors)
+      u_biases = u_biases + lr * da.sum(error - reg * u_biases, axis=1, keepdims=True)
 
-      # u_factors = da.map_blocks(compute_users, x_mask_t, x_t, i_factors, I).T
-      # u_factors = u_factors.compute()
+      error = self.__compute_learing_error(u_factors, i_factors, u_biases, i_biases, x, x_mask)
+      i_factors = i_factors + lr * ((u_factors.T @ error).T - reg * i_factors)
+      i_biases = i_biases + lr * da.sum(error - reg * i_biases, axis=0, keepdims=True)
 
-      # if collect_errors:
-      #   pred = np.dot(u_factors, i_factors)
-      #   error = x_compute - pred * x_mask_compute
-      #   train_errors.append(self.__get_training_errors(error))
+      error = self.__compute_learing_error(u_factors, i_factors, u_biases, i_biases, x, x_mask)
 
-      self.__print_status(epoch + 1, epochs, start_time_epoch, "Processing epoch", step=True)
-    
-    print(train_errors)
+    print("\nComputing in parallel...")
 
-    self.u_factors = u_factors
-    self.i_factors = i_factors
-    print(self.u_factors)
-    print(self.i_factors)
+    compute_start_time = time.time()
+    if collect_errors:
+      self.u_biases, self.i_biases, self.u_factors, self.i_factors, self.train_errors= compute(u_biases, i_biases, u_factors, i_factors, train_errors)
+    else:
+      self.u_biases, self.i_biases, self.u_factors, self.i_factors= compute(u_biases, i_biases, u_factors, i_factors)
+    self.u_biases = self.u_biases.T
+    compute_end_time = time.time()
 
-    self.x = np.dot(u_factors, i_factors)
+    print("Compute parallel time: {} s".format(round(compute_end_time - compute_start_time, 3)))
+    print("Compute parallel time per epoch: {} s".format(round((compute_end_time - compute_start_time) / epochs, 3)))
+
+    if plot_errors:
+      self.__plot_training_errors(self.train_errors)
  
   def predict(self, test_df, user_col=None, item_col=None):
     if user_col is None: user_col = self.user_col
@@ -184,10 +207,11 @@ class ALS:
         u_id = self.u_mapping[user]
         i_id = self.i_mapping[item]
 
-        pred = self.x[u_id][i_id]
+        pred += self.u_biases[0][u_id] + self.i_biases[0][i_id] + self.u_factors[u_id] @ self.i_factors[i_id]
         pred = min(max(self.min_rating, pred), self.max_rating)
       
       predictions.append(pred)
+    print()
 
     return predictions
 
@@ -195,28 +219,7 @@ class ALS:
     mae = self.__mae(ground_truths, predictions)
     mse = self.__mse(ground_truths, predictions)
     rmse = self.__rmse(ground_truths, predictions)
-
     return mae, mse, rmse
-
-  def __mae(self, a, b):
-    return np.abs(np.subtract(a, b)).mean()
-  
-  def __mse(self, a, b):
-    return np.square(np.subtract(a, b)).mean()
-
-  def __rmse(self, a, b):
-    return np.sqrt(((np.subtract(a, b))**2).mean())
-
-  def __print_status(self, iter, max_iter, start_time, status, step=False):
-    elapsed_time = time.time() - start_time 
-    bar_length = 70
-    j= iter / max_iter
-    sys.stdout.write('\r')
-    if step:
-      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% ({iter}/{max_iter}) Elapsed time: {round(elapsed_time, 3)} s - {status}")
-    else:
-      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j) + 1}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
-    sys.stdout.flush()
 
 def run():
     client = Client(n_workers=2)
@@ -225,7 +228,6 @@ def run():
     df = df.drop_duplicates()
     df = df.sort_values('time').drop_duplicates(subset=['item', 'user'], keep="last")
     df = df.drop('time', axis=1)
-    df = df.head(50000)
 
     train = df.sample(frac=0.7, random_state=7)
     print(train.shape)
@@ -235,18 +237,17 @@ def run():
     model.fit(
         n_factors=20,
         train_df=train,
-        epochs=1,
-        chunk_size=50,
-        collect_errors=True
+        epochs=40,
+        chunk_size=3000,
+        collect_errors=True,
+        plot_errors=True
     )
 
     predictions = model.predict(test)
-    # print(len(predictions))
-
     gt = test["rating"].to_numpy()
-    # print(len(gt))
 
-    print(model.eval(gt, predictions))
+    eval = model.eval(gt, predictions)
+    print(eval)
 
     client.shutdown()
 

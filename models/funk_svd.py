@@ -108,7 +108,7 @@ class FunkSVD:
       plt.xlabel(error)
       plt.ylabel('Epoch')
       plt.plot(error_values)
-      plt.savefig("res/{}-{}.png".format(error, datetime.today().strftime('%Y-%m-%d-%H:%M:%S')))
+      plt.savefig("res/{}-{}-{}.png".format(type(self).__name__, error, datetime.today().strftime('%Y-%m-%d-%H:%M:%S')))
 
     print()
 
@@ -124,7 +124,7 @@ class FunkSVD:
   def __print_status(self, iter, max_iter, start_time, status, step=False):
     elapsed_time = time.time() - start_time 
     bar_length = 70
-    j= iter / max_iter
+    j = iter / max_iter
     sys.stdout.write('\r')
     if step:
       sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status} ({iter}/{max_iter})")
@@ -138,7 +138,7 @@ class FunkSVD:
           chunk_size,
           epochs=50,
           lr=0.001,
-          reg=0.001,
+          reg=0.02,
           collect_errors=False,
           plot_errors=False,
           user_col="user",
@@ -229,9 +229,9 @@ def run():
     client = Client(n_workers=2)
     model = FunkSVD(client)
     model.fit(
-        n_factors=30,
+        n_factors=20,
         train_df=train,
-        epochs=2,
+        epochs=40,
         chunk_size=3000,
         collect_errors=True,
         plot_errors=True
