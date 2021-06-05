@@ -9,13 +9,8 @@ def run():
     client = Client()
 
     df = pd.read_csv("data/small.csv", names=["item", "user", "rating", "time"])
-
     df = df.drop_duplicates()
     df = df.drop('time', axis=1)
-
-    # df = df[df['item'].isin(df['item'].value_counts()[df['item'].value_counts() > 5].index)]
-    # df = df[df['user'].isin(df['user'].value_counts()[df['user'].value_counts() > 5].index)]
-
     ddf = dd.from_pandas(df, npartitions=4).compute()
 
     train = ddf.sample(frac=0.8, random_state=7)

@@ -1,11 +1,8 @@
 import time
 import dask.array as da
-from dask.base import persist
 import numpy as np
 import sys
 from dask.distributed import Client
-from dask.diagnostics import ProgressBar
-import dask.dataframe as dd
 import pandas as pd
 from dask import compute
 import sparse
@@ -115,6 +112,26 @@ class FunkSVD:
 
     print()
 
+  def __mae(self, a, b):
+    return (np.abs(np.subtract(a, b))).mean()
+  
+  def __mse(self, a, b):
+    return (np.square(np.subtract(a, b))).mean()
+
+  def __rmse(self, a, b):
+    return np.sqrt(((np.subtract(a, b))**2).mean())
+
+  def __print_status(self, iter, max_iter, start_time, status, step=False):
+    elapsed_time = time.time() - start_time 
+    bar_length = 70
+    j= iter / max_iter
+    sys.stdout.write('\r')
+    if step:
+      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status} ({iter}/{max_iter})")
+    else:
+      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
+    sys.stdout.flush()
+
   def fit(self,
           n_factors,
           train_df,
@@ -152,10 +169,9 @@ class FunkSVD:
     
     print("\nComputing in parallel...")
 
-    compute_start_time = time.time()    
+    compute_start_time = time.time()
     if collect_errors:
-      with ProgressBar():
-        self.u_biases, self.i_biases, self.u_factors, self.i_factors, self.train_errors= compute(u_biases, i_biases, u_factors, i_factors, train_errors)
+      self.u_biases, self.i_biases, self.u_factors, self.i_factors, self.train_errors= compute(u_biases, i_biases, u_factors, i_factors, train_errors)
     else:
       self.u_biases, self.i_biases, self.u_factors, self.i_factors= compute(u_biases, i_biases, u_factors, i_factors)
     self.u_biases = self.u_biases.T
@@ -197,29 +213,7 @@ class FunkSVD:
     mae = self.__mae(ground_truths, predictions)
     mse = self.__mse(ground_truths, predictions)
     rmse = self.__rmse(ground_truths, predictions)
-
     return mae, mse, rmse
-
-  def __mae(self, a, b):
-    return (np.abs(np.subtract(a, b))).mean()
-  
-  def __mse(self, a, b):
-    return (np.square(np.subtract(a, b))).mean()
-
-  def __rmse(self, a, b):
-    return np.sqrt(((np.subtract(a, b))**2).mean())
-
-  def __print_status(self, iter, max_iter, start_time, status, step=False):
-    elapsed_time = time.time() - start_time 
-    bar_length = 70
-    j= iter / max_iter
-    sys.stdout.write('\r')
-    if step:
-      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status} ({iter}/{max_iter})")
-    else:
-      sys.stdout.write(f"[{'=' * int(bar_length * j):{bar_length}s}] {int(100 * j)}% Elapsed time: {round(elapsed_time, 3)} s - {status}")
-    sys.stdout.flush()
-
 
 def run():
     df = pd.read_csv("data/prime_pantry_5.csv", names=["item", "user", "rating", "time"])
@@ -341,8 +335,6 @@ def run():
     
 
     # client.shutdown()
-
-    
 
 if __name__ == '__main__':
     run()
