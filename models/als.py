@@ -68,13 +68,11 @@ class ALS:
   def __init_biases(self):
     u_biases = da.zeros((self.n_users, 1), chunks=(self.chunk_size,1))
     i_biases = da.zeros(self.n_items, chunks=(self.chunk_size,))
-
     return u_biases, i_biases
 
   def __init_latent_vectors(self):
     u_factors = da.random.uniform(0, 0.1, (self.n_users, self.n_factors), chunks=(self.chunk_size, self.n_factors))
     i_factors = da.random.uniform(0, 0.1, (self.n_items, self.n_factors), chunks=(self.chunk_size, self.n_factors))
-
     return u_factors, i_factors
 
   def __compute_learing_error(self, u_factors, i_factors, u_biases, i_biases, x, x_mask):
@@ -86,12 +84,11 @@ class ALS:
     mae = da.sum(da.absolute(error)) / self.n_ratings
     mse = da.sum(error ** 2) / self.n_ratings
     rmse = da.sqrt(mse)
-
     return (mae, mse, rmse)
 
   def __plot_training_errors(self, errors):
     if not os.path.exists('res/'):
-        os.mkdir('res/')
+      os.mkdir('res/')
 
     mapped_errors = {
       "MAE": [],
@@ -106,13 +103,16 @@ class ALS:
 
     sns.set_style("darkgrid")
     start_time = time.time()
+    plt.figure()
+    plt.subplots(figsize=(30, 5))
     for index, (error, error_values) in enumerate(mapped_errors.items()):
       self.__print_status(index + 1, len(mapped_errors), start_time, "Ploting training errors...")
-      plt.figure(index)
-      plt.xlabel(error)
-      plt.ylabel('Epoch')
+      plt.subplot(130 + index + 1)
+      plt.xlabel("Epoch", fontsize=24)
+      plt.ylabel(error, fontsize=24)
       plt.plot(error_values)
-      plt.savefig("res/{}-{}-{}.png".format(type(self).__name__, error, datetime.today().strftime('%Y-%m-%d-%H:%M:%S')))
+    
+    plt.savefig("res/{}-{}-{}.pdf".format(type(self).__name__, "training-errors", datetime.today().strftime('%Y-%m-%d-%H:%M:%S')))
 
     print()
 
@@ -142,13 +142,14 @@ class ALS:
           chunk_size,
           epochs=50,
           lr=0.001,
-          reg=0.02,
+          reg=0.001,
           collect_errors=False,
           plot_errors=False,
           user_col="user",
           item_col="item",
           rating_col="rating",
   ):
+    fit_start_time = time.time()
     df = self.__preprocess_data(train_df, user_col, item_col, rating_col, chunk_size, n_factors)
     x, x_mask = self.__create_sparse_chunked_matrix(df)
     u_biases, i_biases = self.__init_biases()
@@ -176,14 +177,15 @@ class ALS:
 
     compute_start_time = time.time()
     if collect_errors:
-      self.u_biases, self.i_biases, self.u_factors, self.i_factors, self.train_errors= compute(u_biases, i_biases, u_factors, i_factors, train_errors)
+      self.u_biases, self.i_biases, self.u_factors, self.i_factors, self.train_errors = compute(u_biases, i_biases, u_factors, i_factors, train_errors)
     else:
-      self.u_biases, self.i_biases, self.u_factors, self.i_factors= compute(u_biases, i_biases, u_factors, i_factors)
+      self.u_biases, self.i_biases, self.u_factors, self.i_factors = compute(u_biases, i_biases, u_factors, i_factors)
     self.u_biases = self.u_biases.T
     compute_end_time = time.time()
 
     print("Compute parallel time: {} s".format(round(compute_end_time - compute_start_time, 3)))
     print("Compute parallel time per epoch: {} s".format(round((compute_end_time - compute_start_time) / epochs, 3)))
+    print("Total fitting time: {} s".format(round(compute_end_time - fit_start_time, 3)))
 
     if plot_errors:
       self.__plot_training_errors(self.train_errors)
